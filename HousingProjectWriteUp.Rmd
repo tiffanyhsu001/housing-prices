@@ -1,0 +1,236 @@
+---
+title: "Housing Project Write Up"
+author: "Tiffany Hsu"
+output: pdf_document
+---
+
+### Setting Up
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+library(car)
+filledTraining = read.csv("filledTrainData.csv", header = TRUE)
+completetesting = read.csv("completeTesting.csv", header=TRUE)
+```
+Before beginning any analysis, I imputed my data's missing NA values with the mice package.
+
+### Initial Analysis
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+library(dplyr)
+corrmatrix = cor(select_if(filledTraining, is.numeric))
+corrDf = as.data.frame(corrmatrix[,38])
+colnames(corrDf) = "SalePrice"
+corrDf
+```
+To begin my analysis, I first conducted an overall investigation of all the correlation between Sale Price & the other numeric variables. To do this, I created a correlation matrix, and I then extracted the variables with the highest correlation.
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+library(ggplot2)
+# heating rly good , centralair, electrical , functional , garagetype, garagequal, PavedDrive, SaleType, SaleCondition
+ggplot(data = filledTraining, aes(x=Heating, y=SalePrice, color=SalePrice)) + geom_point() + 
+scale_color_gradientn(colours = rainbow(5))
+```
+Next, I investigated the categorical variables and their relationship with Sale Price. In the plot above, I have plotted the factos of Heating vs Sale Price. Since there is high variation between the factors, this variable is considered a very influential (ideal) categorical variable. I recreated this plot with multiple other categorical variables and extracted the ones who displayed similar trends to the one above. 
+
+### Creating New Predictors
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# making new predictors
+Remodeled = rep(NA, nrow(filledTraining)) #whether the house has been remodeled
+for(i in 1:nrow(filledTraining)){
+  if(filledTraining$YearRemodAdd[i] > filledTraining$YearBuilt[i]){
+    Remodeled[i] = "Yes"
+  }else{
+    Remodeled[i] = "No"
+  }
+}
+
+filledTraining$Remodeled = as.factor(Remodeled)
+
+Age = rep(NA, nrow(filledTraining)) #age of the house (present year - year built)
+for(i in 1:nrow(filledTraining)){
+  Age[i] = filledTraining$YrSold[i] - filledTraining$YearBuilt[i]
+}
+filledTraining$Age = Age
+
+
+NumFloors = rep(NA, nrow(filledTraining)) #number of floors in house
+for(i in 1:nrow(filledTraining)){
+  if(filledTraining$X2ndFlrSF[i] == 0){
+      NumFloors[i] = 1
+  }else{
+    NumFloors[i] = 2
+  }
+}
+filledTraining$NumFloors = NumFloors 
+
+
+YearsAgoRemod = rep(NA, nrow(filledTraining)) #years since remodeled
+for(i in 1:nrow(filledTraining)){
+  YearsAgoRemod[i] = filledTraining$YrSold[i] - filledTraining$YearRemodAdd[i]
+}
+filledTraining$YearsAgoRemod = YearsAgoRemod
+
+GarageAge = rep(NA, nrow(filledTraining)) 
+for(i in 1:nrow(filledTraining)){
+  GarageAge[i] = filledTraining$GarageYrBlt[i] - filledTraining$YearBuilt[i]
+}
+filledTraining$GarageAge = GarageAge
+
+Porch = rep(NA, nrow(filledTraining)) #PorchSF
+for(i in 1:nrow(filledTraining)){
+  Porch[i] = filledTraining$OpenPorchSF[i] + filledTraining$X3SsnPorch[i] + filledTraining$ScreenPorch[i] + filledTraining$EnclosedPorch[i]
+}
+
+filledTraining$Porch = Porch
+
+```
+
+In order to have higher R2, I did some research and looked up the popular factors that determine a house's sale price. I created the resulting exra predictors: Remodeled (whether the house has ever been remodeled), NumFloors (the number of floors the house has), YearsAgoRemod (how many years it's been since remodeled), GarageAge (age of the garage), and Porch (sum of all the assorted Porch variables together). After, I made sure to also recreate these variables in the testing data set. 
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+#creating new pred in testing data
+completetesting2 = completetesting
+Age = rep(NA, nrow(completetesting2)) #age of the house (present year - year built)
+for(i in 1:nrow(completetesting2)){
+  if(completetesting2$YrSold[i] - completetesting2$YearBuilt[i] < 0){
+   Age[i] = 0 
+  }else{
+    Age[i] = completetesting2$YrSold[i] - completetesting2$YearBuilt[i]
+  }
+}
+completetesting2$Age = Age
+
+
+YearsAgoRemod = rep(NA, nrow(completetesting2)) #years since remodeled
+for(i in 1:nrow(completetesting2)){
+  if(completetesting2$YrSold[i] - completetesting2$YearRemodAdd[i] < 0){
+   YearsAgoRemod[i] = 0 
+  }else{
+    YearsAgoRemod[i] = completetesting2$YrSold[i] - completetesting2$YearRemodAdd[i]
+  }
+}
+completetesting2$YearsAgoRemod = YearsAgoRemod
+
+NumFloors = rep(NA, nrow(completetesting2)) #number of floors in house
+for(i in 1:nrow(completetesting2)){
+  if(filledTraining$X2ndFlrSF[i] == 0){
+      NumFloors[i] = 1
+  }else{
+    NumFloors[i] = 2
+  }
+}
+completetesting2$NumFloors = NumFloors 
+```
+
+```{r echo = FALSE}
+trained1 = filledTraining[-c(1159,1308,2308),] #removing some bad lev pts
+trained2 = trained1[trained1$Ob != 2438 & trained1$Ob != 529 & trained1$Ob != 2441,]
+```
+
+
+### Building Models
+```{r warning = FALSE, error = FALSE}
+m <- lm((SalePrice) ~ LotFrontage + OverallQual + OverallCond + YearsAgoRemod + 
+          MasVnrArea + Porch + BsmtFinSF1 + BsmtFinSF2  + X1stFlrSF + X2ndFlrSF + 
+          sqrt(NumFloors) + BsmtFullBath + (FullBath) + (HalfBath) + sqrt(BedroomAbvGr) + 
+          (KitchenAbvGr) + Fireplaces + GarageAge + GarageCars + MSZoning + Street + Alley + 
+          LandContour + LotConfig + LandSlope + Neighborhood + Condition1 + BldgType + 
+          HouseStyle + RoofStyle + RoofMatl + Exterior1st + Exterior2nd + MasVnrType + 
+          Foundation +  BsmtExposure + Heating + HeatingQC + CentralAir + Electrical + 
+          FireplaceQu + GarageType + GarageCond + PavedDrive + SaleType + SaleCondition + 
+          Remodeled + (Age), data = trained2)
+par(mfrow=c(2,2))
+plot(m)
+
+```
+&nbsp;   
+I began with a very large model with 40 predictors. From this model, I removed the bad leverage points to achieve my final training data set. Notably, there are some violations here in the Scale Location plot.
+
+### Initial Transformations
+
+```{r echo = FALSE}
+inverseResponsePlot(m)
+```
+I decided to run the inverseResponsePlot to hopefully fix some violations. After running inverseResponsePlot, I transformed my y variable to the 0.75 power. I also removed all my bad leverage points using cook's distance.
+
+```{r echo = FALSE}
+#bad lev points
+cook = cooks.distance(m)
+cookN <- (rstudent(m)^2)/(8+1)*(hatvalues(m))/(1-hatvalues(m))
+
+badlev = unique(which(cook> 4/(length(trained2$SalePrice)-(8+1))))
+
+#removing bad lev pts
+trained3 = trained2[ ! trained2$Ob %in% badlev, ]
+```
+
+```{r warning = FALSE, error = FALSE}
+m1 <- lm((SalePrice)^0.75 ~ LotFrontage + OverallQual + OverallCond + 
+           YearsAgoRemod + MasVnrArea + Porch + BsmtFinSF1 + BsmtFinSF2  + 
+           X1stFlrSF + X2ndFlrSF + sqrt(NumFloors) + BsmtFullBath + (FullBath) + 
+           (HalfBath) + sqrt(BedroomAbvGr) + (KitchenAbvGr) + Fireplaces + 
+           GarageAge + GarageCars + MSZoning + Street + Alley + LandContour + 
+           LotConfig + LandSlope + Neighborhood + Condition1 + BldgType + 
+           HouseStyle + RoofStyle + RoofMatl + Exterior1st + Exterior2nd + 
+           MasVnrType + Foundation +  BsmtExposure + Heating + HeatingQC + 
+           CentralAir + Electrical + FireplaceQu + GarageType + GarageCond + 
+           PavedDrive + SaleType + SaleCondition + Remodeled + (Age), data = trained3)
+summary(m1)$r.squared
+par(mfrow=c(2,2))
+plot(m1)
+vif(m1)
+```
+After performing the transformation, the diagnostic plots look much better, and there are no violations. I investigated the VIF scores as well, and they were all valid, under 5. However, I was still unhappy with the excessive number of predictors (40).
+
+### Reducing Predictors
+```{r echo = FALSE, results = 'hide'}
+backAIC <- step(m1,direction="backward", data=trained3)
+```
+
+
+```{r warning = FALSE, error = FALSE, message = FALSE}
+backAICm = lm((SalePrice)^0.75 ~ OverallQual + OverallCond + YearsAgoRemod + 
+    MasVnrArea + BsmtFinSF1 + BsmtFinSF2 + X1stFlrSF + 
+    X2ndFlrSF + sqrt(NumFloors) + BsmtFullBath + sqrt(BedroomAbvGr) + 
+    KitchenAbvGr + Fireplaces + GarageCars + LotConfig + LandSlope + 
+    Neighborhood + Condition1 + BldgType + Exterior1st + Exterior2nd + 
+    MasVnrType + Foundation + BsmtExposure + Heating + GarageType + 
+    SaleCondition + Age , data = trained3)
+summary(backAICm)$r.squared
+par(mfrow=c(2,2))
+plot(backAICm)
+vif(backAICm)
+```
+Since I wanted to reduce my number of predictors, I conducted a backwards AIC test, using the step function. This, along with some further variable elimination, reduced my model down to 28 predictors. I reduced some of the categorical variables using the partial f test, using the anova(reduced, full) function. My model ended up having an R2 of .9454 with valid plots and valid VIF scores. 
+
+
+### Final Transformations
+```{r error = FALSE, warning = FALSE, message = FALSE}
+m2.1 = lm((SalePrice)^0.75 ~ I(OverallQual^2) + I(OverallCond^2) + YearsAgoRemod + 
+    MasVnrArea + (BsmtFinSF1) + BsmtFinSF2 + X1stFlrSF + I(X2ndFlrSF^2) + 
+    sqrt(NumFloors) + I(BsmtFullBath^2) + sqrt(BedroomAbvGr) + I(KitchenAbvGr^2) + 
+    Fireplaces + I(GarageCars^2) + LotConfig + LandSlope + Neighborhood + Condition1 + 
+    BldgType + Exterior1st + Exterior2nd + MasVnrType + Foundation + BsmtExposure + 
+    Heating + GarageType + SaleCondition + I(Age^.5) , data = trained3)
+summary(m2.1)$r.squared # .9529 valid model vif
+par(mfrow=c(2,2))
+plot(m2.1)
+vif(m2.1)
+```
+To further increase my R2, I performed a few transformations on variables that I inferred would be more influential on sale price with heavier weights. For example, I squared the # of cars that could fit in a garage because it's very important in determining prices. These transformations increased my R2 to .9529 with valid plots and valid VIFs.
+
+### Final Predictions, Conclusion
+```{r echo = FALSE}
+predict2 = as.data.frame( (predict(m2.1, completetesting2))^(4/3) )
+predict2$Ob = 1:1500
+predict2 = predict2[,c(2,1)]
+colnames(predict2) = c("Ob", "SalePrice")
+#write.csv(predict2,'newsub1.csv', row.names=FALSE)
+summary(predict2$SalePrice)
+# 0.90079 and valid
+```
+To finish off, I ran predictions on the testing data (after it was imputed) using the predict() function. My final R2 in testing data being 0.90079.
+&nbsp;    
+&nbsp;   
+If I had more time for improvements, I would definitely work on reducing the number of predictors that I ended up having. Although I had 28 variables in my model, I had 111 Betas in my model because of the categorical variables with multiple factors. Specifically, I would figure out a way to reduce the Neighborhood variable to include fewer levels, as there are currently 24. The excessive number of predictors could be the cause of my model's overfitting, and a simpler model is always better! 
+&nbsp;    
+&nbsp;   
+My final diagnostic plots ended up looking very good, however there was still a minor violation in the QQ plot, as the ends of my plot strayed off from the normal distribution. I would definitely spend more time improving this violation by performing powerTransform or boxCox. Similarly, there is a slight upwards trend at the end of my Scale-Location plot, which I would also spend more time fixing. Even with these slight mishaps, overall, my model is valid, including without the issue of multicollinearity. 
